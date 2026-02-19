@@ -1,9 +1,13 @@
+import 'dart:io';
 import 'dart:math';
 
 import 'package:dummy_app/mobile_appbar.dart';
 import 'package:dummy_app/mobile_bottombar.dart';
 import 'package:dummy_app/scan_stepper.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:open_file/open_file.dart';
+import 'package:path_provider/path_provider.dart';
 
 class HomePage extends StatefulWidget {
   const HomePage({super.key});
@@ -15,22 +19,37 @@ class HomePage extends StatefulWidget {
 class _HomePageState extends State<HomePage> {
   final cropMap = {
     "Turmeric": {
-      "crop_property": ["Powder Single Lot", "Finger"],
-      "crop_pred_property": ["Curcumin", "Moisture", "Oleorisin", "Starch"],
+      "crop_property": ["Powder Single Lot", "Powder Blend", "Oleoresin"],
+      "crop_pred_property": ["Curcumin", "Oleorisin", "Starch"],
       "predictions": [
-        [4.46, 15.4, 16.95, 34],
-        [4.48, 15.2, 17.02, 34.2],
-        [4.47, 14.2, 16.92, 34.2],
+        [5.06, 11.44, 48.68],
+        [5.21, 11.56, 48.65],
+        [5.25, 11.66, 48.62],
       ],
+      "pdf": "assets/turmeric.pdf",
     },
     "Chilli": {
-      "crop_property": ["Sample Test", "Hello worldj"],
-      "crop_pred_property": ["Red", "While", "Orange", "Pink"],
+      "crop_property": ["Powder", "Whole", "Blended", "Oleoresin"],
+      "crop_pred_property": ["Moisture", "Color", "Oleoresin", "Pungency-SHU"],
       "predictions": [
-        [5.0, 3.0, 7.0, 2.0],
-        [4.5, 3.5, 6.5, 2.5],
-        [5.5, 2.5, 7.5, 1.5],
+        [9.48, 85.93, 6.21, 54824.88],
+        [9.56, 91.81, 6.41, 51622.36],
+        [9.56, 94.24, 6.63, 48435.11],
+        [9.44, 95.99, 6.40, 44731.34],
+        [9.41, 95.45, 6.40, 45661.99],
+        [9.39, 95.92, 6.45, 45595.45],
       ],
+      "pdf": "assets/chilli.pdf",
+    },
+    "Pepper": {
+      "crop_property": ["Powder", "Kernel"],
+      "crop_pred_property": ["Volatile Oil", "Oleoresin", "Piperine"],
+      "predictions": [
+        [3.93, 6.09, 7.91],
+        [4.26, 6.0, 8.07],
+        [4.15, 6.18, 8.24],
+      ],
+      "pdf": "assets/pepper.pdf",
     },
   };
   final GlobalKey<FormState> _formKey = GlobalKey<FormState>();
@@ -43,22 +62,32 @@ class _HomePageState extends State<HomePage> {
   // Each entry: { "label": "Iteration 1", "Curcumin": 3.45, ... }
   final List<Map<String, dynamic>> _scanRows = [];
 
+  // Snapshot of predProperties at the time the scan ended.
+  // Used for display so that changing crop after a scan doesn't crash.
+  List<String> _frozenPredProperties = [];
+
   List<String> get _predProperties =>
       _selectedCrop != null
           ? List<String>.from(
-            cropMap[_selectedCrop!]?["crop_pred_property"] ?? [],
+            cropMap[_selectedCrop!]?["crop_pred_property"] as List? ?? [],
           )
           : [];
 
   List<String> get _cropProperties =>
       _selectedCrop != null
-          ? List<String>.from(cropMap[_selectedCrop!]?["crop_property"] ?? [])
+          ? List<String>.from(
+            cropMap[_selectedCrop!]?["crop_property"] as List? ?? [],
+          )
           : [];
+
+  // When scan has ended, use the frozen prop-list so crop changes don't crash.
+  List<String> get _displayPredProperties =>
+      scanEnded ? _frozenPredProperties : _predProperties;
 
   Map<String, double> get _averages {
     if (_scanRows.isEmpty) return {};
     final avgs = <String, double>{};
-    for (final prop in _predProperties) {
+    for (final prop in _displayPredProperties) {
       final vals = _scanRows.map((r) => (r[prop] as double)).toList();
       avgs[prop] = vals.reduce((a, b) => a + b) / vals.length;
     }
@@ -113,6 +142,7 @@ class _HomePageState extends State<HomePage> {
 
   void _endScan() {
     setState(() {
+      _frozenPredProperties = List<String>.from(_predProperties);
       scanEnded = true;
       scanStarted = false;
     });
@@ -123,6 +153,7 @@ class _HomePageState extends State<HomePage> {
       scanStarted = false;
       scanEnded = false;
       _scanRows.clear();
+      _frozenPredProperties = [];
     });
   }
 
@@ -132,12 +163,36 @@ class _HomePageState extends State<HomePage> {
     });
   }
 
+  Future<void> _openPdf() async {
+    final pdfAssetPath = cropMap[_selectedCrop!]?['pdf'] as String?;
+    if (pdfAssetPath == null) return;
+    try {
+      final byteData = await rootBundle.load(pdfAssetPath);
+      final tempDir = await getTemporaryDirectory();
+      final fileName = pdfAssetPath.split('/').last;
+      final file = File('${tempDir.path}/$fileName');
+      await file.writeAsBytes(byteData.buffer.asUint8List());
+      await OpenFile.open(file.path);
+    } catch (e) {
+      debugPrint('Error opening PDF: $e');
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
 
     return Scaffold(
       appBar: MobileAppBar(title: "Home"),
+      floatingActionButton:
+          scanEnded
+              ? FloatingActionButton(
+                backgroundColor: Colors.green,
+                onPressed: _openPdf,
+                tooltip: 'Download PDF',
+                child: const Icon(Icons.print, color: Colors.white),
+              )
+              : null,
       body: SingleChildScrollView(
         padding: const EdgeInsets.all(16.0),
         child: Form(
@@ -208,7 +263,7 @@ class _HomePageState extends State<HomePage> {
                     child: DropdownButtonFormField<String>(
                       value: _selectedCropProperty,
                       decoration: const InputDecoration(
-                        labelText: 'Crop Property',
+                        labelText: 'Form',
                         border: OutlineInputBorder(),
                       ),
                       items:
@@ -282,6 +337,7 @@ class _HomePageState extends State<HomePage> {
                       scanStarted = false;
                       scanEnded = false;
                       _scanRows.clear();
+                      _frozenPredProperties = [];
                       scanStarted = true;
                     });
                     return;
@@ -318,7 +374,7 @@ class _HomePageState extends State<HomePage> {
           child: Row(
             children: [
               _tableCell("S.No", isHeader: true, flex: 2),
-              for (final p in _predProperties)
+              for (final p in _displayPredProperties)
                 _tableCell(p, isHeader: true, flex: 4),
               if (!scanEnded)
                 _tableCell("", isHeader: true, flex: 2), // delete col header
@@ -330,7 +386,7 @@ class _HomePageState extends State<HomePage> {
           Row(
             children: [
               _tableCell("${i + 1}", flex: 2),
-              for (final p in _predProperties)
+              for (final p in _displayPredProperties)
                 _tableCell(
                   (_scanRows[i][p] as double).toStringAsFixed(2),
                   flex: 4,
@@ -363,7 +419,7 @@ class _HomePageState extends State<HomePage> {
           textAlign: TextAlign.center,
           style: TextStyle(
             fontWeight: isHeader ? FontWeight.bold : FontWeight.normal,
-            overflow: TextOverflow.ellipsis,
+            // overflow: TextOverflow.ellipsis,
             fontSize: 13,
           ),
         ),
@@ -374,8 +430,8 @@ class _HomePageState extends State<HomePage> {
   Widget _buildAverageTiles() {
     final avgs = _averages;
     return Wrap(
-      spacing: 8.0,
-      runSpacing: 8.0,
+      spacing: 6.0,
+      runSpacing: 6.0,
       alignment: WrapAlignment.center,
       crossAxisAlignment: WrapCrossAlignment.center,
       runAlignment: WrapAlignment.spaceAround,
@@ -383,47 +439,50 @@ class _HomePageState extends State<HomePage> {
           avgs.entries.map((e) {
             return ConstrainedBox(
               constraints: BoxConstraints(
-                maxWidth: MediaQuery.of(context).size.width * 0.45,
+                minWidth: 80,
+                maxWidth: 80,
+                minHeight: 80,
               ),
-              child: Container(
-                decoration: BoxDecoration(
-                  color: Colors.lightGreen,
-                  boxShadow: [
-                    BoxShadow(
-                      color: Colors.grey.shade400,
-                      blurRadius: 6,
-                      spreadRadius: 2,
-                      offset: const Offset(2, 2),
-                    ),
-                  ],
-                  borderRadius: BorderRadius.circular(15),
-                ),
-                height: 80,
-                width: 80,
-                padding: const EdgeInsets.all(8),
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    Text(
-                      e.key,
-                      textAlign: TextAlign.center,
-                      style: const TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.bold,
-                        color: Colors.black87,
+              child: IntrinsicHeight(
+                child: Container(
+                  decoration: BoxDecoration(
+                    color: Colors.lightGreen,
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.grey.shade400,
+                        blurRadius: 6,
+                        spreadRadius: 2,
+                        offset: const Offset(2, 2),
                       ),
-                    ),
-                    const SizedBox(height: 6),
-                    Text(
-                      e.value.toStringAsFixed(2),
-                      textAlign: TextAlign.center,
-                      style: const TextStyle(
-                        fontSize: 14,
-                        fontWeight: FontWeight.w600,
-                        color: Colors.black,
+                    ],
+                    borderRadius: BorderRadius.circular(15),
+                  ),
+                  padding: const EdgeInsets.all(8),
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        e.key,
+                        textAlign: TextAlign.center,
+                        style: const TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.bold,
+                          color: Colors.black87,
+                        ),
                       ),
-                    ),
-                  ],
+                      const SizedBox(height: 6),
+                      Text(
+                        e.value.toStringAsFixed(2),
+                        textAlign: TextAlign.center,
+                        style: const TextStyle(
+                          fontSize: 14,
+                          fontWeight: FontWeight.w600,
+                          color: Colors.black,
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
               ),
             );
